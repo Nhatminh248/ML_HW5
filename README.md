@@ -51,3 +51,19 @@ The program prints the following:
 - The best rule found, along with its fitness score.
 - A summary of the evolutionary process with fitness and rule history.
 - Detailed evaluation metrics such as accuracy, precision, recall, F1 score, and confusion matrix for the best rule.
+
+
+## [Updated] Synthetic Data Generation
+
+Enhances the GA's performance by expanding the training dataset while preserving original patterns.
+
+### Features:
+- **Pattern Preservation**: Maintains original attribute-outcome relationships
+- **Customizable**: Control dataset size (`num_samples`) and randomness (`noise_level`)
+- **Auto-balancing**: Ensures equal class distribution
+
+### Technical Approach:
+- First-pass analysis of attribute-value-outcome probabilities
+- Bayesian-style probability updates when generating each sample
+- Smart handling of rare attribute combinations
+- Optional class rebalancing
