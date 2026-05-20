@@ -1,335 +1,376 @@
 import numpy as np
 import pandas as pd
 import random
-from collections import defaultdict
-from generate import generate_synthetic_data, create_balanced_dataset
 
-# Define the Play-Tennis dataset attributes
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
+
 attributes = {
-    'Outlook': ['Sunny', 'Overcast', 'Rain'],
+    'Outlook':     ['Sunny', 'Overcast', 'Rain'],
     'Temperature': ['Hot', 'Mild', 'Cool'],
-    'Humidity': ['High', 'Normal'],
-    'Wind': ['Weak', 'Strong']
+    'Humidity':    ['High', 'Normal'],
+    'Wind':        ['Weak', 'Strong'],
 }
 
-# Sample Play-Tennis dataset from Chapter 3
-def create_play_tennis_dataset():
-    data = [
-        ['Sunny', 'Hot', 'High', 'Weak', 'No'],
-        ['Sunny', 'Hot', 'High', 'Strong', 'No'],
-        ['Overcast', 'Hot', 'High', 'Weak', 'Yes'],
-        ['Rain', 'Mild', 'High', 'Weak', 'Yes'],
-        ['Rain', 'Cool', 'Normal', 'Weak', 'Yes'],
-        ['Rain', 'Cool', 'Normal', 'Strong', 'No'],
-        ['Overcast', 'Cool', 'Normal', 'Strong', 'Yes'],
-        ['Sunny', 'Mild', 'High', 'Weak', 'No'],
-        ['Sunny', 'Cool', 'Normal', 'Weak', 'Yes'],
-        ['Rain', 'Mild', 'Normal', 'Weak', 'Yes'],
-        ['Sunny', 'Mild', 'Normal', 'Strong', 'Yes'],
-        ['Overcast', 'Mild', 'High', 'Strong', 'Yes'],
-        ['Overcast', 'Hot', 'Normal', 'Weak', 'Yes'],
-        ['Rain', 'Mild', 'High', 'Strong', 'No']
-    ]
-    columns = ['Outlook', 'Temperature', 'Humidity', 'Wind', 'PlayTennis']
-    return pd.DataFrame(data, columns=columns)
 
-# Convert the bit-string to a rule
-def bitstring_to_rule(bitstring, attributes):
+def create_play_tennis_dataset() -> pd.DataFrame:
+    data = [
+        ['Sunny',    'Hot',  'High',   'Weak',   'No'],
+        ['Sunny',    'Hot',  'High',   'Strong', 'No'],
+        ['Overcast', 'Hot',  'High',   'Weak',   'Yes'],
+        ['Rain',     'Mild', 'High',   'Weak',   'Yes'],
+        ['Rain',     'Cool', 'Normal', 'Weak',   'Yes'],
+        ['Rain',     'Cool', 'Normal', 'Strong', 'No'],
+        ['Overcast', 'Cool', 'Normal', 'Strong', 'Yes'],
+        ['Sunny',    'Mild', 'High',   'Weak',   'No'],
+        ['Sunny',    'Cool', 'Normal', 'Weak',   'Yes'],
+        ['Rain',     'Mild', 'Normal', 'Weak',   'Yes'],
+        ['Sunny',    'Mild', 'Normal', 'Strong', 'Yes'],
+        ['Overcast', 'Mild', 'High',   'Strong', 'Yes'],
+        ['Overcast', 'Hot',  'Normal', 'Weak',   'Yes'],
+        ['Rain',     'Mild', 'High',   'Strong', 'No'],
+    ]
+    return pd.DataFrame(data, columns=['Outlook', 'Temperature', 'Humidity', 'Wind', 'PlayTennis'])
+
+
+# ---------------------------------------------------------------------------
+# Encoding helpers
+# ---------------------------------------------------------------------------
+
+def calculate_bitstring_length(attributes: dict) -> int:
+    return sum(len(v) for v in attributes.values())
+
+
+def bitstring_to_rule(bitstring: list, attributes: dict) -> str:
+    """Convert a bit-string to a human-readable conjunctive rule."""
     rule_parts = []
     idx = 0
-    
     for attr, values in attributes.items():
-        attr_conditions = []
-        for val in values:
-            if bitstring[idx] == 1:
-                attr_conditions.append(f"{attr}={val}")
-            idx += 1
-        
-        if attr_conditions:
-            if len(attr_conditions) == 1:
-                rule_parts.append(attr_conditions[0])
-            else:
-                rule_parts.append(f"({' OR '.join(attr_conditions)})")
-    
-    if not rule_parts:
-        return "True"
-    return " AND ".join(rule_parts)
+        active = [values[i] for i in range(len(values)) if bitstring[idx + i] == 1]
+        if len(active) == 1:
+            rule_parts.append(f"{attr}={active[0]}")
+        elif len(active) > 1:
+            rule_parts.append(f"({' OR '.join(f'{attr}={v}' for v in active)})")
+        idx += len(values)
+    return " AND ".join(rule_parts) if rule_parts else "True (no conditions)"
 
-def calculate_bitstring_length(attributes):
-    return sum(len(values) for values in attributes.values())
 
-def initialize_population(pop_size, bitstring_length):
-    return [np.random.randint(0, 2, bitstring_length).tolist() for _ in range(pop_size)]
-
-def evaluate_fitness(bitstring, dataset, attributes):
-    if sum(bitstring) == 0:
-        return 0.1
-    
-    correct_predictions = 0
-    total_instances = len(dataset)
-    
-    for _, instance in dataset.iterrows():
-        if matches_rule(bitstring, instance, attributes):
-            if instance['PlayTennis'] == 'Yes':
-                correct_predictions += 1
-        else:
-            if instance['PlayTennis'] == 'No':
-                correct_predictions += 1
-    
-    accuracy = correct_predictions / total_instances
-    complexity_penalty = 0.001 * sum(bitstring) / len(bitstring)
-    return accuracy - complexity_penalty
-
-def matches_rule(bitstring, instance, attributes):
+def matches_rule(bitstring: list, instance: pd.Series, attributes: dict) -> bool:
+    """
+    Return True if `instance` satisfies every condition in the rule.
+    An attribute whose bits are all 0 is treated as a wildcard (no constraint).
+    """
     idx = 0
     for attr, values in attributes.items():
-        match_found = False
-        for i, val in enumerate(values):
-            if bitstring[idx + i] == 1 and instance[attr] == val:
-                match_found = True
-                break
-        
-        if not match_found and any(bitstring[idx:idx+len(values)]):
+        attr_bits = bitstring[idx: idx + len(values)]
+        # Wildcard — no constraint on this attribute
+        if not any(attr_bits):
+            idx += len(values)
+            continue
+        # At least one bit set — instance must match one of the active values
+        matched = any(attr_bits[i] == 1 and instance[attr] == values[i]
+                      for i in range(len(values)))
+        if not matched:
             return False
-        
         idx += len(values)
     return True
 
-def select_parents(population, fitnesses, tournament_size=3):
-    parent1_idx = tournament_selection(fitnesses, tournament_size)
-    parent2_idx = tournament_selection(fitnesses, tournament_size)
-    return population[parent1_idx], population[parent2_idx]
 
-def tournament_selection(fitnesses, tournament_size):
+# ---------------------------------------------------------------------------
+# Fitness
+# ---------------------------------------------------------------------------
+
+def evaluate_fitness(bitstring: list, dataset: pd.DataFrame, attributes: dict) -> float:
+    """
+    Laplace accuracy over instances that match the rule.
+
+        fitness = (TP + 1) / (TP + FP + 2) - complexity_penalty
+
+    This rewards precision on the covered set rather than overall accuracy,
+    preventing the GA from collapsing to trivially broad rules.
+    A rule with no active bits is given fitness 0.
+    """
+    if sum(bitstring) == 0:
+        return 0.0
+
+    tp = fp = 0
+    for _, instance in dataset.iterrows():
+        if matches_rule(bitstring, instance, attributes):
+            if instance['PlayTennis'] == 'Yes':
+                tp += 1
+            else:
+                fp += 1
+
+    laplace = (tp + 1) / (tp + fp + 2)
+    complexity_penalty = 0.001 * sum(bitstring) / len(bitstring)
+    return laplace - complexity_penalty
+
+
+# ---------------------------------------------------------------------------
+# Evaluation (reporting only — not used by GA internally)
+# ---------------------------------------------------------------------------
+
+def evaluate_rule_performance(bitstring: list, dataset: pd.DataFrame, attributes: dict) -> dict:
+    tp = fp = tn = fn = 0
+    for _, instance in dataset.iterrows():
+        matched = matches_rule(bitstring, instance, attributes)
+        positive = instance['PlayTennis'] == 'Yes'
+        if matched and positive:
+            tp += 1
+        elif matched and not positive:
+            fp += 1
+        elif not matched and positive:
+            fn += 1
+        else:
+            tn += 1
+
+    total = len(dataset)
+    accuracy  = (tp + tn) / total
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1        = (2 * precision * recall / (precision + recall)
+                 if (precision + recall) > 0 else 0.0)
+    laplace   = (tp + 1) / (tp + fp + 2)
+
+    return {
+        'accuracy':  accuracy,
+        'precision': precision,
+        'recall':    recall,
+        'f1_score':  f1,
+        'laplace':   laplace,
+        'confusion_matrix': {
+            'true_positives':  tp,
+            'false_positives': fp,
+            'true_negatives':  tn,
+            'false_negatives': fn,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Genetic operators
+# ---------------------------------------------------------------------------
+
+def initialize_population(pop_size: int, bitstring_length: int) -> list:
+    return [np.random.randint(0, 2, bitstring_length).tolist()
+            for _ in range(pop_size)]
+
+
+def tournament_selection(fitnesses: list, tournament_size: int = 3) -> int:
     candidates = random.sample(range(len(fitnesses)), tournament_size)
-    best_idx = candidates[0]
-    for idx in candidates:
-        if fitnesses[idx] > fitnesses[best_idx]:
-            best_idx = idx
-    return best_idx
+    return max(candidates, key=lambda i: fitnesses[i])
 
-def single_point_crossover(parent1, parent2):
-    if len(parent1) <= 1:
-        return parent1.copy(), parent2.copy()
-    
-    crossover_point = random.randint(1, len(parent1) - 1)
-    child1 = parent1[:crossover_point] + parent2[crossover_point:]
-    child2 = parent2[:crossover_point] + parent1[crossover_point:]
-    return child1, child2
 
-def two_point_crossover(parent1, parent2):
-    if len(parent1) <= 2:
-        return parent1.copy(), parent2.copy()
-    
-    point1 = random.randint(1, len(parent1) - 2)
-    point2 = random.randint(point1 + 1, len(parent1) - 1)
-    
-    child1 = parent1[:point1] + parent2[point1:point2] + parent1[point2:]
-    child2 = parent2[:point1] + parent1[point1:point2] + parent2[point2:]
-    return child1, child2
+def select_parents(population: list, fitnesses: list, tournament_size: int = 3):
+    i = tournament_selection(fitnesses, tournament_size)
+    j = tournament_selection(fitnesses, tournament_size)
+    return population[i], population[j]
 
-def uniform_crossover(parent1, parent2, p=0.5):
-    child1, child2 = [], []
-    for i in range(len(parent1)):
-        if random.random() < p:
-            child1.append(parent1[i])
-            child2.append(parent2[i])
+
+def single_point_crossover(p1, p2):
+    if len(p1) <= 1:
+        return p1.copy(), p2.copy()
+    pt = random.randint(1, len(p1) - 1)
+    return p1[:pt] + p2[pt:], p2[:pt] + p1[pt:]
+
+
+def two_point_crossover(p1, p2):
+    if len(p1) <= 2:
+        return p1.copy(), p2.copy()
+    a = random.randint(1, len(p1) - 2)
+    b = random.randint(a + 1, len(p1) - 1)
+    return (p1[:a] + p2[a:b] + p1[b:],
+            p2[:a] + p1[a:b] + p2[b:])
+
+
+def uniform_crossover(p1, p2, prob=0.5):
+    c1, c2 = [], []
+    for b1, b2 in zip(p1, p2):
+        if random.random() < prob:
+            c1.append(b1); c2.append(b2)
         else:
-            child1.append(parent2[i])
-            child2.append(parent1[i])
-    return child1, child2
+            c1.append(b2); c2.append(b1)
+    return c1, c2
 
-def attribute_based_crossover(parent1, parent2, attributes):
-    child1, child2 = [], []
+
+def attribute_based_crossover(p1, p2, attributes):
+    """Crossover at attribute boundaries to keep attribute segments intact."""
+    c1, c2 = [], []
     idx = 0
-    
-    for attr, values in attributes.items():
-        attr_length = len(values)
+    for values in attributes.values():
+        n = len(values)
         if random.random() < 0.5:
-            child1.extend(parent1[idx:idx+attr_length])
-            child2.extend(parent2[idx:idx+attr_length])
+            c1.extend(p1[idx: idx + n])
+            c2.extend(p2[idx: idx + n])
         else:
-            child1.extend(parent2[idx:idx+attr_length])
-            child2.extend(parent1[idx:idx+attr_length])
-        idx += attr_length
-    
-    return child1, child2
+            c1.extend(p2[idx: idx + n])
+            c2.extend(p1[idx: idx + n])
+        idx += n
+    return c1, c2
 
-def mutate(bitstring, mutation_rate):
+
+def mutate(bitstring: list, mutation_rate: float, attributes: dict) -> list:
+    """
+    Flip a bit with probability `mutation_rate`.
+    When a bit is flipped on, the rest of that attribute's bits are cleared
+    to keep the encoding valid (at most one active value per attribute after
+    a mutation event; crossover may produce multi-value conditions, which is
+    intentional and represents OR-conditions within an attribute).
+    """
     result = bitstring.copy()
-    for i in range(len(result)):
-        if random.random() < mutation_rate:
-            attr_idx = 0
-            for attr, values in attributes.items():
-                if i in range(attr_idx, attr_idx+len(values)):
-                    result[attr_idx:attr_idx+len(values)] = [0]*len(values)
-                    result[i] = 1
-                    break
-                attr_idx += len(values)
+    idx = 0
+    for values in attributes.values():
+        n = len(values)
+        for i in range(n):
+            if random.random() < mutation_rate:
+                # Clear all bits for this attribute, then set the flipped one
+                result[idx: idx + n] = [0] * n
+                result[idx + i] = 1
+                break   # one mutation event per attribute per call
+        idx += n
     return result
 
-def evaluate_rule_performance(rule_bitstring, dataset, attributes):
-    true_positives = 0
-    true_negatives = 0
-    false_positives = 0
-    false_negatives = 0
-    
-    for _, instance in dataset.iterrows():
-        matches = matches_rule(rule_bitstring, instance, attributes)
-        actual_positive = instance['PlayTennis'] == 'Yes'
-        
-        if matches and actual_positive:
-            true_positives += 1
-        elif matches and not actual_positive:
-            false_positives += 1
-        elif not matches and actual_positive:
-            false_negatives += 1
-        else:
-            true_negatives += 1
-    
-    total = len(dataset)
-    accuracy = (true_positives + true_negatives) / total
-    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
-    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-    
-    return {
-        'accuracy': accuracy,
-        'precision': precision,
-        'recall': recall,
-        'f1_score': f1,
-        'confusion_matrix': {
-            'true_positives': true_positives,
-            'false_positives': false_positives,
-            'true_negatives': true_negatives,
-            'false_negatives': false_negatives
-        }
-    }
 
-def genetic_algorithm(dataset, attributes, pop_size=50, generations=100, replacement_rate=0.5, mutation_rate=0.01, crossover_type='single'):
-    crossover_funcs = {
-        'single': single_point_crossover,
-        'two_point': two_point_crossover,
-        'uniform': uniform_crossover,
-        'attribute': lambda p1, p2: attribute_based_crossover(p1, p2, attributes)
-    }
-    
-    crossover_func = crossover_funcs.get(crossover_type, single_point_crossover)
-    bitstring_length = calculate_bitstring_length(attributes)
-    population = initialize_population(pop_size, bitstring_length)
-    best_fitness = 0
-    best_solution = None
+# ---------------------------------------------------------------------------
+# Genetic algorithm
+# ---------------------------------------------------------------------------
+
+CROSSOVER_FUNCS = {
+    'single':     single_point_crossover,
+    'two_point':  two_point_crossover,
+    'uniform':    uniform_crossover,
+    'attribute':  None,   # handled specially (needs attributes arg)
+}
+
+
+def genetic_algorithm(
+    dataset: pd.DataFrame,
+    attributes: dict,
+    pop_size: int = 50,
+    generations: int = 100,
+    replacement_rate: float = 0.5,
+    mutation_rate: float = 0.01,
+    crossover_type: str = 'attribute',
+) -> tuple:
+    length = calculate_bitstring_length(attributes)
+    population = initialize_population(pop_size, length)
+
+    best_fitness = -1.0
+    best_solution = population[0]
     history = {'max_fitness': [], 'avg_fitness': [], 'best_rule': []}
-    
-    for generation in range(generations):
+
+    def crossover(p1, p2):
+        if crossover_type == 'attribute':
+            return attribute_based_crossover(p1, p2, attributes)
+        return CROSSOVER_FUNCS[crossover_type](p1, p2)
+
+    for gen in range(generations):
         fitnesses = [evaluate_fitness(ind, dataset, attributes) for ind in population]
-        max_fitness = max(fitnesses)
-        avg_fitness = sum(fitnesses) / len(fitnesses)
-        history['max_fitness'].append(max_fitness)
-        history['avg_fitness'].append(avg_fitness)
-        
-        best_idx = fitnesses.index(max_fitness)
-        if max_fitness > best_fitness:
-            best_fitness = max_fitness
+
+        max_f = max(fitnesses)
+        avg_f = sum(fitnesses) / len(fitnesses)
+        history['max_fitness'].append(max_f)
+        history['avg_fitness'].append(avg_f)
+
+        best_idx = fitnesses.index(max_f)
+        if max_f > best_fitness:
+            best_fitness = max_f
             best_solution = population[best_idx]
-            best_rule = bitstring_to_rule(best_solution, attributes)
-            history['best_rule'].append((generation, best_rule, best_fitness))
-        
-        num_to_replace = int(pop_size * replacement_rate)
-        elites = sorted(range(len(fitnesses)), key=lambda i: fitnesses[i], reverse=True)[:pop_size-num_to_replace]
-        next_population = [population[i] for i in elites]
-        
-        while len(next_population) < pop_size:
-            parent1, parent2 = select_parents(population, fitnesses)
-            child1, child2 = crossover_func(parent1, parent2)
-            next_population.append(mutate(child1, mutation_rate))
-            if len(next_population) < pop_size:
-                next_population.append(mutate(child2, mutation_rate))
-        
-        population = next_population
-    
-    best_rule = bitstring_to_rule(best_solution, attributes)
-    print(f"Best Rule (Fitness: {best_fitness:.4f}): {best_rule}")
+            history['best_rule'].append(
+                (gen, bitstring_to_rule(best_solution, attributes), best_fitness)
+            )
+
+        # Elitism: keep top (1 - replacement_rate) fraction unchanged
+        n_replace = int(pop_size * replacement_rate)
+        elite_idxs = sorted(range(len(fitnesses)), key=lambda i: fitnesses[i], reverse=True)
+        next_pop = [population[i] for i in elite_idxs[: pop_size - n_replace]]
+
+        while len(next_pop) < pop_size:
+            p1, p2 = select_parents(population, fitnesses)
+            c1, c2 = crossover(p1, p2)
+            next_pop.append(mutate(c1, mutation_rate, attributes))
+            if len(next_pop) < pop_size:
+                next_pop.append(mutate(c2, mutation_rate, attributes))
+
+        population = next_pop
+
+    print(f"  Best Rule (fitness={best_fitness:.4f}): {bitstring_to_rule(best_solution, attributes)}")
     return best_solution, best_fitness, history
 
-def run_experiments(dataset, attributes):
-    configurations = [
-        {'pop_size': 50, 'replacement_rate': 0.3, 'mutation_rate': 0.05, 'crossover_type': 'attribute'},
-        {'pop_size': 100, 'replacement_rate': 0.5, 'mutation_rate': 0.1, 'crossover_type': 'uniform'},
-        {'pop_size': 30, 'replacement_rate': 0.2, 'mutation_rate': 0.02, 'crossover_type': 'attribute'},
-        {'pop_size': 80, 'replacement_rate': 0.4, 'mutation_rate': 0.08, 'crossover_type': 'two_point'},
-        {'pop_size': 150, 'replacement_rate': 0.6, 'mutation_rate': 0.15, 'crossover_type': 'uniform'},
-        {'pop_size': 40, 'replacement_rate': 0.25, 'mutation_rate': 0.03, 'crossover_type': 'single'}
-    ]
-    
+
+# ---------------------------------------------------------------------------
+# Experiment runner
+# ---------------------------------------------------------------------------
+
+CONFIGURATIONS = [
+    {'pop_size': 50,  'replacement_rate': 0.3, 'mutation_rate': 0.05, 'crossover_type': 'attribute'},
+    {'pop_size': 100, 'replacement_rate': 0.5, 'mutation_rate': 0.10, 'crossover_type': 'uniform'},
+    {'pop_size': 30,  'replacement_rate': 0.2, 'mutation_rate': 0.02, 'crossover_type': 'attribute'},
+    {'pop_size': 80,  'replacement_rate': 0.4, 'mutation_rate': 0.08, 'crossover_type': 'two_point'},
+    {'pop_size': 150, 'replacement_rate': 0.6, 'mutation_rate': 0.15, 'crossover_type': 'uniform'},
+    {'pop_size': 40,  'replacement_rate': 0.25,'mutation_rate': 0.03, 'crossover_type': 'single'},
+]
+
+
+def run_experiments(dataset: pd.DataFrame, attributes: dict) -> list:
     results = []
-    for i, config in enumerate(configurations):
-        print(f"\nExperiment {i+1}: {config}")
-        _, fitness, history = genetic_algorithm(
-            dataset, attributes, 
-            pop_size=config['pop_size'],
-            replacement_rate=config['replacement_rate'],
-            mutation_rate=config['mutation_rate'],
-            crossover_type=config['crossover_type']
-        )
-        results.append({'config': config, 'fitness': fitness, 'history': history})
-    
-    print("\nExperiment Results Summary:")
-    for i, result in enumerate(results):
-        config = result['config']
-        print(f"Experiment {i+1}: Pop={config['pop_size']}, Replace={config['replacement_rate']}, "
-              f"Mutation={config['mutation_rate']}, Crossover={config['crossover_type']} -> "
-              f"Best Fitness: {result['fitness']:.4f}")
+    for i, cfg in enumerate(CONFIGURATIONS):
+        print(f"\nExperiment {i + 1}: {cfg}")
+        _, fitness, history = genetic_algorithm(dataset, attributes, **cfg)
+        results.append({'config': cfg, 'fitness': fitness, 'history': history})
+
+    print("\n--- Experiment Results Summary ---")
+    for i, r in enumerate(results):
+        c = r['config']
+        print(f"  Exp {i+1}: pop={c['pop_size']} replace={c['replacement_rate']} "
+              f"mut={c['mutation_rate']} xover={c['crossover_type']} "
+              f"-> fitness={r['fitness']:.4f}")
     return results
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
-    original_dataset = create_play_tennis_dataset()
-    print("Original Play-Tennis Dataset:")
-    print(original_dataset)
-    
-    synthetic_dataset = generate_synthetic_data(original_dataset, num_samples=50) 
-    combined_dataset = create_balanced_dataset(original_dataset, synthetic_dataset)
-    print("\nCombined Dataset (Original + Synthetic) Sample:")
-    print(combined_dataset.sample(10))
-    
-    results = run_experiments(combined_dataset, attributes)
+    dataset = create_play_tennis_dataset()
+    print("=== Play-Tennis Dataset (14 instances) ===")
+    print(dataset.to_string(index=False))
+
+    print("\n=== Running Experiments ===")
+    results = run_experiments(dataset, attributes)
+
     best_result = max(results, key=lambda r: r['fitness'])
-    best_config = best_result['config']
-    
-    print("\nBest Configuration:")
-    print(f"Population Size: {best_config['pop_size']}")
-    print(f"Replacement Rate: {best_config['replacement_rate']}")
-    print(f"Mutation Rate: {best_config['mutation_rate']}")
-    print(f"Crossover Type: {best_config['crossover_type']}")
-    print(f"Best Fitness: {best_result['fitness']:.4f}")
-    
-    print("\nRunning final experiment with best configuration...")
-    best_rule_bitstring, _, history = genetic_algorithm(
-        combined_dataset, attributes,
-        pop_size=best_config['pop_size'],
-        replacement_rate=best_config['replacement_rate'],
-        mutation_rate=best_config['mutation_rate'],
-        crossover_type=best_config['crossover_type'],
-        generations=200
+    best_cfg    = best_result['config']
+
+    print("\n=== Best Configuration ===")
+    for k, v in best_cfg.items():
+        print(f"  {k}: {v}")
+    print(f"  Fitness: {best_result['fitness']:.4f}")
+
+    print("\n=== Final Run with Best Configuration (200 generations) ===")
+    best_bitstring, best_fitness, history = genetic_algorithm(
+        dataset, attributes, generations=200, **best_cfg
     )
-    
-    print("\nEvolution of the best rule:")
+
+    print("\n--- Rule Evolution ---")
     for gen, rule, fit in history['best_rule']:
-        print(f"Generation {gen}: {rule} (Fitness: {fit:.4f})")
-    
-    print("\nDetailed evaluation of the best rule:")
-    best_rule_text = bitstring_to_rule(best_rule_bitstring, attributes)
-    print(f"Best rule: {best_rule_text}")
-    metrics = evaluate_rule_performance(best_rule_bitstring, combined_dataset, attributes)
-    print(f"Accuracy: {metrics['accuracy']:.4f}")
-    print(f"Precision: {metrics['precision']:.4f}")
-    print(f"Recall: {metrics['recall']:.4f}")
-    print(f"F1 Score: {metrics['f1_score']:.4f}")
-    print("Confusion Matrix:")
-    print(f"  True Positives: {metrics['confusion_matrix']['true_positives']}")
-    print(f"  False Positives: {metrics['confusion_matrix']['false_positives']}")
-    print(f"  True Negatives: {metrics['confusion_matrix']['true_negatives']}")
-    print(f"  False Negatives: {metrics['confusion_matrix']['false_negatives']}")
+        print(f"  Gen {gen:>3}: {rule}  (fitness={fit:.4f})")
+
+    print("\n--- Detailed Evaluation of Best Rule ---")
+    rule_text = bitstring_to_rule(best_bitstring, attributes)
+    print(f"  Rule     : {rule_text}")
+    m = evaluate_rule_performance(best_bitstring, dataset, attributes)
+    print(f"  Laplace  : {m['laplace']:.4f}")
+    print(f"  Accuracy : {m['accuracy']:.4f}")
+    print(f"  Precision: {m['precision']:.4f}")
+    print(f"  Recall   : {m['recall']:.4f}")
+    print(f"  F1 Score : {m['f1_score']:.4f}")
+    cm = m['confusion_matrix']
+    print(f"  Confusion: TP={cm['true_positives']}  FP={cm['false_positives']}  "
+          f"TN={cm['true_negatives']}  FN={cm['false_negatives']}")
+
 
 if __name__ == "__main__":
     main()
